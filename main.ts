@@ -1,12 +1,6 @@
 /**
- * Релей для чата: Deno Deploy стоит перед сайтом и просто передаёт трафик.
- *
- * Зачем: телефон (и любой клиент) заходит на адрес *.deno.dev, а Deno уже
- * соединяется с https://sosint.fun. Если из сети клиента Cloudflare замедляют,
- * путь через край Deno может пройти — плюс не нужен свой сервер и домен.
- *
- * Важно: ничего не кеширует и не меняет содержимое. WebSocket пробрасывается
- * как есть, поэтому чат и голос работают без изменений на клиенте.
+ * Релей для чата: Стоит перед сайтом и просто передаёт трафик.
+ * Интегрирован обход ограничений WebRTC (Voice/Video) через Xirsys TURN.
  *
  * Запуск локально:
  *   deno run --allow-net --allow-env main.ts
@@ -124,8 +118,54 @@ function proxyWebSocket(req: Request, url: URL): Response {
   return response;
 }
 
-Deno.serve({ port: PORT, hostname: "0.0.0.0" }, (req) => {
+Deno.serve({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
   const url = new URL(req.url);
+
+  // === ИНТЕГРАЦИЯ XIRSYS TURN ДЛЯ ГОЛОСА ===
+  if (url.pathname === "/api/ice") {
+    // Обработка Preflight CORS-запросов браузера
+    if (req.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "*",
+        },
+      });
+    }
+
+    const ident = "affaff";
+    const secret = "ad5839b2-cfc8-11f1-91c7-4037728939b8";
+    const channel = "channel0e399448";
+
+    try {
+      const response = await fetch(`https://xirsys.net{channel}`, {
+        method: "PUT",
+        headers: {
+          "Authorization": "Basic " + btoa(`${ident}:${secret}`),
+          "Content-Type": "application/json",
+        },
+      });
+      const data = await response.json();
+
+      return new Response(JSON.stringify({ iceServers: data.v.iceServers }), {
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: String(error) }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+  }
+  // === КОНЕЦ ИНТЕГРАЦИИ XIRSYS ===
+
   const upgrade = req.headers.get("upgrade")?.toLowerCase();
 
   if (upgrade === "websocket") {
